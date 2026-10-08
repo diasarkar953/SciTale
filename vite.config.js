@@ -1,0 +1,80 @@
+import { defineConfig, loadEnv } from 'vite';
+import react from '@vitejs/plugin-react';
+import tailwindcss from '@tailwindcss/vite';
+
+function expressiveNarration(getApiKey) {
+  return {
+    name: 'scytale-expressive-narration',
+    configureServer(server) {
+      server.middlewares.use('/api/tts', async (req, res) => {
+        if (req.method !== 'POST') {
+          res.statusCode = 405;
+          res.end('Method not allowed');
+          return;
+        }
+
+        const apiKey = getApiKey();
+        if (!apiKey) {
+          res.statusCode = 503;
+          res.end('Expressive narration is not configured');
+          return;
+        }
+
+        try {
+          let body = '';
+          for await (const chunk of req) {
+            body += chunk;
+            if (body.length > 200_000) {
+              res.statusCode = 413;
+              res.end('Text is too long');
+              return;
+            }
+          }
+          const { text } = JSON.parse(body || '{}');
+          if (typeof text !== 'string' || !text.trim()) {
+            res.statusCode = 400;
+            res.end('Text is required');
+            return;
+          }
+
+          const upstream = await fetch('https://api.openai.com/v1/audio/speech', {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${apiKey}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              model: 'gpt-4o-mini-tts',
+              voice: 'coral',
+              input: text,
+              instructions: 'Read this as an original, lively science-story narrator for children. Sound bright, playful, warm, and genuinely curious, with expressive changes in pitch and emphasis. Make discoveries exciting and reassuring moments gentle. Keep a clear, natural pace so young listeners can understand every word. Do not imitate any specific character or performer.',
+              response_format: 'mp3',
+            }),
+          });
+
+          if (!upstream.ok) {
+            res.statusCode = upstream.status === 401 ? 503 : 502;
+            res.end('Expressive narration is temporarily unavailable');
+            return;
+          }
+          res.setHeader('Content-Type', 'audio/mpeg');
+          res.setHeader('Cache-Control', 'no-store');
+          res.end(Buffer.from(await upstream.arrayBuffer()));
+        } catch (error) {
+          console.error('Narration request failed:', error.message);
+          if (!res.headersSent) {
+            res.statusCode = 502;
+            res.end('Expressive narration is temporarily unavailable');
+          }
+        }
+      });
+    },
+  };
+}
+
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), '');
+  return {
+    plugins: [react(), tailwindcss(), expressiveNarration(() => env.OPENAI_API_KEY || process.env.OPENAI_API_KEY)],
+  };
+});
