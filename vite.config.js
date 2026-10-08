@@ -1,6 +1,7 @@
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
+import { GoogleGenAI } from '@google/genai';
 
 function expressiveNarration(getApiKey) {
   return {
@@ -37,31 +38,53 @@ function expressiveNarration(getApiKey) {
             return;
           }
 
-          const upstream = await fetch('https://api.openai.com/v1/audio/speech', {
-            method: 'POST',
-            headers: {
-              Authorization: `Bearer ${apiKey}`,
-              'Content-Type': 'application/json',
+          const ai = new GoogleGenAI({
+            apiKey,
+            httpOptions: {
+              headers: {
+                'User-Agent': 'aistudio-build',
+              },
             },
-            body: JSON.stringify({
-              model: 'gpt-4o-mini-tts',
-              voice: 'coral',
-              input: text,
-              instructions: 'Read this as an original, lively science-story narrator for children. Sound bright, playful, warm, and genuinely curious, with expressive changes in pitch and emphasis. Make discoveries exciting and reassuring moments gentle. Keep a clear, natural pace so young listeners can understand every word. Do not imitate any specific character or performer.',
-              response_format: 'mp3',
-            }),
           });
 
-          if (!upstream.ok) {
-            res.statusCode = upstream.status === 401 ? 503 : 502;
+          const response = await ai.models.generateContent({
+            model: 'gemini-3.8-flash-lite-tts',
+            contents: [
+              {
+                role: 'user',
+                parts: [
+                  {
+                    text,
+                    speechMetadata: {
+                      style: 'Read this as an original, lively science-story narrator for children. Sound bright, playful, warm, and genuinely curious, with expressive changes in pitch and emphasis. Make discoveries exciting and reassuring moments gentle.',
+                    },
+                  },
+                ],
+              },
+            ],
+            config: {
+              responseModalities: ['AUDIO'],
+              speechConfig: {
+                voiceConfig: {
+                  prebuiltVoiceConfig: { voiceName: 'Kore' },
+                },
+              },
+            },
+          });
+
+          const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+          if (!base64Audio) {
+            res.statusCode = 502;
             res.end('Expressive narration is temporarily unavailable');
             return;
           }
-          res.setHeader('Content-Type', 'audio/mpeg');
+
+          const wavBuffer = Buffer.from(base64Audio, 'base64');
+          res.setHeader('Content-Type', 'audio/wav');
           res.setHeader('Cache-Control', 'no-store');
-          res.end(Buffer.from(await upstream.arrayBuffer()));
+          res.end(wavBuffer);
         } catch (error) {
-          console.error('Narration request failed:', error.message);
+          console.error('Gemini narration request failed:', error.message);
           if (!res.headersSent) {
             res.statusCode = 502;
             res.end('Expressive narration is temporarily unavailable');
@@ -75,6 +98,11 @@ function expressiveNarration(getApiKey) {
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
   return {
-    plugins: [react(), tailwindcss(), expressiveNarration(() => env.OPENAI_API_KEY || process.env.OPENAI_API_KEY)],
+    server: {
+      host: '0.0.0.0',
+      port: 3000,
+      allowedHosts: true,
+    },
+    plugins: [react(), tailwindcss(), expressiveNarration(() => env.GEMINI_API_KEY || process.env.GEMINI_API_KEY)],
   };
 });
